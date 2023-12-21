@@ -28,32 +28,29 @@ enum handshake {
     HANDSHAKE_BOTH
 };
 
-typedef struct _serial_data *SerialData;
+typedef struct _serial_device *SerialDevice;
 typedef struct serial Serial;
 
-struct serial {
-    SerialData data;
-
-    bool (* set_baudrate) (Serial *serial, const uint32_t baudrate);
-    void (* set_parity) (Serial *serial,enum parity parity);
-    void (* set_access_mode) (Serial *serial, enum access_mode accessMode);
-    void (* set_databits) (Serial *serial, uint8_t databits);
-    void (* set_stopbits) (Serial *serial, uint8_t stopbits);
-    void (* set_echo) (Serial *serial, bool on);
-    void (* set_handshake) (Serial *serial, enum handshake handshake);
-    uint32_t (* get_current_baudrate) (Serial serial);
-    uint8_t (* get_databits) (Serial serial);
-    uint8_t (* get_stopbits) (Serial serial);
-    bool (* is_echo_on) (Serial serial);
-    enum handshake (* get_handshake) (Serial serial);
-    enum parity (* get_parity) (Serial serial);
-    enum access_mode (* get_access_mode) (Serial serial);
+struct _serial {
+    SerialDevice (* init) (const char *port);
+    void (* free) (SerialDevice *device);
+    bool (* set_baudrate) (SerialDevice device, const uint32_t baudrate);
+    void (* set_parity) (SerialDevice device,enum parity parity);
+    void (* set_access_mode) (SerialDevice device, enum access_mode accessMode);
+    void (* set_databits) (SerialDevice device, uint8_t databits);
+    void (* set_stopbits) (SerialDevice device, uint8_t stopbits);
+    void (* set_echo) (SerialDevice device, bool on);
+    void (* set_handshake) (SerialDevice device, enum handshake handshake);
+    uint32_t (* get_current_baudrate) (SerialDevice device);
+    uint8_t (* get_databits) (SerialDevice device);
+    uint8_t (* get_stopbits) (SerialDevice device);
+    bool (* is_echo_on) (SerialDevice device);
+    enum handshake (* get_handshake) (SerialDevice device);
+    enum parity (* get_parity) (SerialDevice device);
+    enum access_mode (* get_access_mode) (SerialDevice device);
 
 };
 
-
-
-Serial *serial_init(const char *port);
-void serial_free(Serial **serial);
+extern const struct _serial serial;
 
 #endif //GSMAPP_SERIAL_H

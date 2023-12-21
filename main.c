@@ -4,8 +4,8 @@
 
 int main() {
     printf("Hello, World!\n");
-    GSM* gsm = gsm_init();
-    gsm->sendSMS("gholi", "09214528198");
-    gsm_free(gsm);
+    GSMDevice gsm_device = gsm.init();
+    gsm.sendSMS("gholi", "09214528198");
+    gsm.free(&gsm_device);
     return 0;
 }

@@ -1,6 +1,6 @@
 //
 // Created by Amin Khozaei on 12/19/23.
-//amin.khozaei@gmail.com
+// amin.khozaei@gmail.com
 //
 #include "serial.h"
 
@@ -10,74 +10,136 @@
 #include <string.h>
 #include <stdlib.h>
 
-static bool _serial_set_baudrate (Serial *serial, const uint32_t baudrate);
+static SerialDevice serial_init(const char *port);
+static void serial_free(SerialDevice *device);
+static bool serial_set_baudrate (SerialDevice device, const uint32_t baudrate);
+static void serial_set_parity (SerialDevice device,enum parity parity);
+static void serial_set_access_mode (SerialDevice device, enum access_mode accessMode);
+static void serial_set_databits (SerialDevice device, uint8_t databits);
+static void serial_set_stopbits (SerialDevice device, uint8_t stopbits);
+static void serial_set_echo (SerialDevice device, bool on);
+static void serial_set_handshake (SerialDevice device, enum handshake handshake);
+static uint32_t serial_get_current_baudrate (SerialDevice device);
+static uint8_t serial_get_databits (SerialDevice device);
+static uint8_t serial_get_stopbits (SerialDevice device);
+static bool serial_is_echo_on (SerialDevice device);
+static enum handshake serial_get_handshake (SerialDevice device);
+static enum parity serial_get_parity (SerialDevice device);
+static enum access_mode serial_get_access_mode (SerialDevice device);
 static speed_t validate_baudrate(uint32_t);
-struct _serial_data{
+
+
+const struct _serial serial = {
+        .init = &serial_init,
+        .free = &serial_free,
+        .set_baudrate = &serial_set_baudrate,
+        .set_parity = &serial_set_parity,
+        .set_access_mode = &serial_set_access_mode,
+        .set_databits = &serial_set_databits,
+        .set_handshake = &serial_set_handshake,
+        .set_echo = &serial_set_echo,
+        .set_stopbits = &serial_set_stopbits,
+        .get_access_mode = &serial_get_access_mode,
+        .get_current_baudrate = &serial_get_current_baudrate,
+        .get_databits = &serial_get_databits,
+        .get_handshake = &serial_get_handshake,
+        .get_parity = &serial_get_parity,
+        .get_stopbits = &serial_get_stopbits,
+        .is_echo_on = &serial_is_echo_on
+};
+struct _serial_device{
     char                *port;
     int                 fd;
+    uint8_t             access;
     struct termios      config;
     struct termios      old_config;
     struct sigaction    action;
 };
 
-Serial *serial_init(const char *port)
+SerialDevice serial_init(const char *port)
 {
     size_t name_len;
-    Serial *serial;
+    struct _serial_device *device;
 
     name_len = (strlen(port) + 1);
-    serial = calloc(sizeof (Serial), 1);
-    if (serial == NULL)
+    device = calloc(sizeof (struct _serial_device), 1);
+    if (device == NULL)
         return NULL;
-    serial->data = calloc(sizeof (struct _serial_data), 1);
-    if (serial->data == NULL){
-        free(serial);
-        serial = NULL;
-    }
-    serial->data->port = calloc(sizeof (uint8_t),name_len);
-    strncpy(serial->data->port, port, name_len);
-    serial->data->config.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP
+    device->port = calloc(sizeof (uint8_t),name_len);
+    strncpy(device->port, port, name_len);
+    device->config.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP
                              | INLCR | IGNCR | ICRNL | IXON);
-    serial->data->config.c_oflag &= ~OPOST;
-    serial->data->config.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
-    serial->data->config.c_cflag &= ~(CSIZE | PARENB);
-    serial->data->config.c_cflag |= CS8;
-    serial->data->config.c_cc[VTIME] = 0;
-    serial->data->config.c_cc[VMIN] = 1;
+    device->config.c_oflag &= ~OPOST;
+    device->config.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+    device->config.c_cflag &= ~(CSIZE | PARENB);
+    device->config.c_cflag |= CS8;
+    device->config.c_cc[VTIME] = 0;
+    device->config.c_cc[VMIN] = 1;
 
-    serial->set_baudrate = &_serial_set_baudrate;
-    return serial;
+    return device;
 }
 
-void serial_free(Serial **serial)
+void serial_free(SerialDevice *device)
 {
-    if ((*serial) != NULL){
-        if ((*serial)->data != NULL){
-            if ((*serial)->data->fd > 0)
-            {
-                tcsetattr((*serial)->data->fd, TCSANOW, &((*serial)->data->old_config));
-            }
-            free((*serial)->data->port);
-            (*serial)->data->port = NULL;
-            free((*serial)->data);
-            (*serial)->data = NULL;
+    if ((*device) != NULL){
+        if ((*device)->fd > 0)
+        {
+            tcsetattr((*device)->fd, TCSANOW, &((*device)->old_config));
         }
-        free((*serial));
-        *serial = NULL;
+        free((*device)->port);
+        (*device)->port = NULL;
+        free((*device));
+        *device = NULL;
     }
 }
 
-bool _serial_set_baudrate (Serial *serial, const uint32_t baudrate)
+bool serial_set_baudrate (SerialDevice device, const uint32_t baudrate)
 {
     int result;
     speed_t speed;
 
     speed = validate_baudrate(baudrate);
-    if (serial != NULL && serial->data != NULL && speed != B0){
-        result = cfsetospeed(&serial->data->config, speed);
-        return ((result == 0) && (cfsetispeed(&serial->data->config, speed) == 0));
+    if (device != NULL && speed != B0){
+        result = cfsetospeed(&device->config, speed);
+        return ((result == 0) && (cfsetispeed(&device->config, speed) == 0));
     }
     return false;
+}
+
+void serial_set_parity (SerialDevice device,enum parity parity)
+{
+    if ( device == NULL )
+        return;
+
+    device->config.c_cflag &= ~( PARENB | PARODD );
+    if (parity == PARITY_EVEN)
+    {
+        device->config.c_cflag |= PARENB;
+    }
+    else if (parity == PARITY_ODD)
+    {
+        device->config.c_cflag |= ( PARENB | PARODD );
+    }
+}
+
+void serial_set_access_mode (SerialDevice device, enum access_mode accessMode)
+{
+    if ( device == NULL )
+        return;
+    switch (accessMode)
+    {
+        case ACCESS_READ_ONLY:
+            device->access = ACCESS_READ_ONLY;
+            break;
+        case ACCESS_WRITE_ONLY:
+            device->access = ACCESS_WRITE_ONLY;
+            break;
+        case ACCESS_READ_WRITE:
+            device->access = ACCESS_READ_WRITE;
+            break;
+        default:
+            device->access = ACCESS_NONE;
+    }
 }
 
 speed_t validate_baudrate(uint32_t baud)

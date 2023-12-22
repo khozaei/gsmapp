@@ -9,10 +9,25 @@
 #include <bits/sigaction.h>
 #include <string.h>
 #include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+#define UNUSED(X) (void)(X);
+#define STB_DS_IMPLEMENTATION
+#include "stb_ds.h"
 
 static SerialDevice serial_init(const char *port);
 static void serial_free(SerialDevice *device);
-static bool serial_set_baudrate (SerialDevice device, const uint32_t baudrate);
+
+static void serial_open (SerialDevice device);
+static void serial_close (SerialDevice device);
+static intmax_t serial_write (SerialDevice device, const uint8_t *data, size_t length);
+static intmax_t serial_read (SerialDevice device,  uint8_t *data, size_t length);
+static void serial_enable_async (SerialDevice device, void (* callback) (int fd, uint8_t *data, size_t length));
+static void serial_disable_async (SerialDevice device);
+static void serial_action (int signum, siginfo_t *info, void *context);
+
+static bool serial_set_baudrate (SerialDevice device, uint32_t baudrate);
 static void serial_set_parity (SerialDevice device,enum parity parity);
 static void serial_set_access_mode (SerialDevice device, enum access_mode accessMode);
 static void serial_set_databits (SerialDevice device, uint8_t databits);
@@ -28,10 +43,15 @@ static enum parity serial_get_parity (SerialDevice device);
 static enum access_mode serial_get_access_mode (SerialDevice device);
 static speed_t validate_baudrate(uint32_t);
 
-
 const struct _serial serial = {
         .init = &serial_init,
         .free = &serial_free,
+        .open = &serial_open,
+        .close = &serial_close,
+        .write = &serial_write,
+        .read = &serial_read,
+        .enable_async = &serial_enable_async,
+        .disable_async = &serial_disable_async,
         .set_baudrate = &serial_set_baudrate,
         .set_parity = &serial_set_parity,
         .set_access_mode = &serial_set_access_mode,
@@ -47,6 +67,7 @@ const struct _serial serial = {
         .get_stopbits = &serial_get_stopbits,
         .is_echo_on = &serial_is_echo_on
 };
+
 struct _serial_device{
     char                *port;
     int                 fd;
@@ -54,7 +75,11 @@ struct _serial_device{
     struct termios      config;
     struct termios      old_config;
     struct sigaction    action;
+
+    void (* callback) (int fd, uint8_t *data, size_t length);
 };
+
+static struct _serial_device *device_list;
 
 SerialDevice serial_init(const char *port)
 {
@@ -93,13 +118,155 @@ void serial_free(SerialDevice *device)
     }
 }
 
+void serial_open (SerialDevice device)
+{
+    int flag;
+
+    if (device == NULL)
+        return;
+    if ( device->fd > 0 )
+    {
+        close(device->fd);
+        device->fd = -1;
+    }
+    switch(device->access)
+    {
+        case ACCESS_READ_ONLY:
+            flag = (O_RDONLY | O_NONBLOCK);
+            break;
+        case ACCESS_WRITE_ONLY:
+            flag = (O_WRONLY | O_NONBLOCK);
+            break;
+        case ACCESS_READ_WRITE:
+            flag = (O_RDWR | O_NONBLOCK);
+            break;
+        default:
+            flag = (O_RDONLY | O_NONBLOCK);
+    }
+    device->fd = open(device->port, flag);
+    if (device->fd > 0)
+    {
+        tcgetattr(device->fd, &device->old_config);
+        tcflush(device->fd, TCIOFLUSH);
+        tcsetattr(device->fd, TCSANOW, &device->config);
+    }
+}
+
+void serial_close (SerialDevice device)
+{
+    if (device == NULL)
+        return;
+    if ( device->fd > 0 )
+    {
+        tcsetattr(device->fd, TCSANOW, &device->config);
+        close(device->fd);
+        device->fd = -1;
+    }
+}
+
+intmax_t serial_write (SerialDevice device, const uint8_t *data, size_t length)
+{
+    intmax_t res;
+
+    res = 0;
+    if (device == NULL)
+        return 0;
+    if ( device->fd > 0 )
+    {
+        res = write(device->fd, data, length);
+        tcdrain(device->fd);
+    }
+    return res;
+}
+
+intmax_t serial_read (SerialDevice device,  uint8_t *data, size_t length)
+{
+    intmax_t res;
+
+    res = 0;
+    if (device == NULL)
+        return 0;
+    if ( device->fd > 0)
+    {
+        res = read(device->fd, data, length);
+    }
+    return res;
+}
+
+void serial_enable_async (SerialDevice device, void (* callback) (int fd, uint8_t *data, size_t length))
+{
+    if (device == NULL)
+        return;
+    if (device->fd > 0)
+    {
+        arrput(device_list, *device);
+        device->action.sa_sigaction = serial_action;
+        device->action.sa_flags |= SA_SIGINFO;
+        device->action.sa_restorer = NULL;
+        sigaction(SIGIO, &device->action, NULL);
+        fcntl(device->fd, F_SETFL, O_ASYNC | FNDELAY);
+        fcntl(device->fd, F_GETOWN, getpid());
+    }
+}
+
+void serial_disable_async (SerialDevice device)
+{
+    struct sigaction tmp;
+
+    if (device == NULL)
+        return;
+    if (device->fd > 0)
+    {
+        for ( int i = 0; i <= arrlen(device_list); i++)
+        {
+            if ( device_list != NULL &&  device_list[i].fd == device->fd)
+            {
+                        arrdelswap(device_list,i);
+            }
+        }
+        memcpy(&tmp, &device->action, sizeof(device->action));
+        device->action.sa_sigaction = NULL;
+        device->action.sa_flags = SA_RESETHAND;
+        sigaction(SIGIO, &device->action, &tmp);
+        if (arrlenu(device_list) == 0)
+                    arrfree(device_list);
+        device_list = NULL;
+    }
+}
+
+void serial_action (int signum, siginfo_t *info, void *context)
+{
+    UNUSED(signum)
+    UNUSED(context)
+    if (info == NULL)
+        return;
+    for ( int i = 0; i <= arrlen(device_list); i++)
+    {
+        if ( device_list != NULL && device_list[i].fd == info->si_fd)
+        {
+            if (device_list[i].callback != NULL)
+            {
+                if ( device_list[i].fd > 0)
+                {
+                    size_t res;
+                    uint8_t  data[1024];
+
+                    res = read(device_list[i].fd, data, 1024);
+                    device_list[i].callback(device_list[i].fd, data, res);
+                }
+            }
+        }
+    }
+}
+
 bool serial_set_baudrate (SerialDevice device, const uint32_t baudrate)
 {
     int result;
     speed_t speed;
 
     speed = validate_baudrate(baudrate);
-    if (device != NULL && speed != B0){
+    if (device != NULL && speed != B0)
+    {
         result = cfsetospeed(&device->config, speed);
         return ((result == 0) && (cfsetispeed(&device->config, speed) == 0));
     }
@@ -139,6 +306,297 @@ void serial_set_access_mode (SerialDevice device, enum access_mode accessMode)
             break;
         default:
             device->access = ACCESS_NONE;
+    }
+}
+
+void serial_set_databits (SerialDevice device, uint8_t databits)
+{
+    if (device == NULL)
+        return;
+    switch (databits)
+    {
+        case 5:
+            device->config.c_cflag = ( device->config.c_cflag & ~CSIZE ) | CS5;
+            break;
+        case 6:
+            device->config.c_cflag = ( device->config.c_cflag & ~CSIZE ) | CS6;
+            break;
+        case 7:
+            device->config.c_cflag = ( device->config.c_cflag & ~CSIZE ) | CS7;
+            break;
+        case 8:
+        default:
+            device->config.c_cflag = ( device->config.c_cflag & ~CSIZE ) | CS8;
+            break;
+    }
+    device->config.c_cflag |= CLOCAL | CREAD;
+}
+
+void serial_set_stopbits (SerialDevice device, uint8_t stopbits)
+{
+    if (device == NULL)
+        return;
+    if ( stopbits == 2 )
+    {
+        device->config.c_cflag |= CSTOPB;
+    }
+    else
+    {
+        device->config.c_cflag &= ~CSTOPB;
+    }
+}
+
+void serial_set_echo (SerialDevice device, bool on)
+{
+    if (device == NULL)
+        return;
+    if (on)
+    {
+        device->config.c_lflag |= ECHO;
+    }
+    else
+    {
+        device->config.c_lflag &= ~ECHO;
+    }
+}
+
+void serial_set_handshake (SerialDevice device, enum handshake handshake)
+{
+    if (device == NULL)
+        return;
+    if ( handshake == HANDSHAKE_SOFTWARE || handshake == HANDSHAKE_BOTH)
+    {
+        device->config.c_iflag |= IXON | IXOFF;
+    }
+    else
+    {
+        device->config.c_iflag &= ~(IXON | IXOFF | IXANY);
+    }
+
+    if (handshake == HANDSHAKE_HARDWARE || handshake == HANDSHAKE_BOTH)
+    {
+        device->config.c_cflag |= CRTSCTS;
+    }
+    else
+    {
+        device->config.c_cflag &= ~CRTSCTS;
+    }
+}
+
+uint32_t serial_get_current_baudrate (SerialDevice device)
+{
+    speed_t baud;
+
+    if (device == NULL)
+        return 0;
+    if ( device->fd > 0)
+    {
+        struct termios tmp;
+        tcgetattr(device->fd, &tmp);
+        baud = cfgetispeed(&tmp);
+    }
+    else
+    {
+        baud = cfgetispeed(&device->config);
+    }
+    switch(baud)
+    {
+        case B50:
+            return 50;
+        case B75:
+            return 75;
+        case B110:
+            return 110;
+        case B134:
+            return 134;
+        case B150:
+            return 150;
+        case B200:
+            return 200;
+        case B300:
+            return 300;
+        case B600:
+            return 600;
+        case B1200:
+            return 1200;
+        case B2400:
+            return 2400;
+        case B4800:
+            return 4800;
+        case B9600:
+            return 9600;
+        case B19200:
+            return 19200;
+        case B38400:
+            return 38400;
+        case B57600:
+            return 57600;
+        case B115200:
+            return 115200;
+        case B230400:
+            return 230400;
+        case B460800:
+            return 460800;
+        case B500000:
+            return 500000;
+        case B576000:
+            return 576000;
+        case B921600:
+            return 921600;
+        case B1000000:
+            return 1000000;
+        case B1152000:
+            return 1152000;
+        case B1500000:
+            return 1500000;
+        case B2000000:
+            return 2000000;
+            //additional non-sparc baudrates
+        case B2500000:
+            return 2500000;
+        case B3000000:
+            return 3000000;
+        case B3500000:
+            return 3500000;
+        case B4000000:
+            return 4000000;
+
+        default:
+            return 0;
+    }
+}
+
+uint8_t serial_get_databits (SerialDevice device)
+{
+    struct termios tmp;
+
+    if (device == NULL)
+        return 0;
+    if ( device->fd > 0 )
+    {
+        tcgetattr(device->fd, &tmp);
+    }
+    else
+    {
+        memcpy(&tmp,&device->config,sizeof(device->config));
+    }
+    switch (tmp.c_cflag & CSIZE)
+    {
+        case CS5:
+            return 5;
+        case CS6:
+            return 6;
+        case CS7:
+            return 7;
+        case CS8:
+            return 8;
+        default:
+            return 0;
+    }
+}
+
+uint8_t serial_get_stopbits (SerialDevice device)
+{
+    struct termios tmp;
+
+    if (device == NULL)
+        return 0;
+    if ( device->fd > 0 )
+    {
+        tcgetattr(device->fd, &tmp);
+    }
+    else
+    {
+        memcpy(&tmp,&device->config,sizeof(device->config));
+    }
+
+    return (tmp.c_cflag & CSTOPB)?2:1;
+}
+
+bool serial_is_echo_on (SerialDevice device)
+{
+    struct termios tmp;
+
+    if (device == NULL)
+        return false;
+    if ( device->fd > 0 )
+    {
+        tcgetattr(device->fd, &tmp);
+    }
+    else
+    {
+        memcpy(&tmp,&device->config,sizeof(device->config));
+    }
+
+    return (tmp.c_lflag & ECHO);
+}
+
+enum handshake serial_get_handshake (SerialDevice device)
+{
+    struct termios tmp;
+    bool software, hardware;
+
+    software = false;
+    hardware = false;
+    if (device == NULL)
+        return HANDSHAKE_NONE;
+    if ( device->fd > 0 )
+    {
+        tcgetattr(device->fd, &tmp);
+    }
+    else
+    {
+        memcpy(&tmp,&device->config,sizeof(device->config));
+    }
+
+    software = ((tmp.c_iflag & (IXON | IXOFF)) != 0);
+    hardware = ((tmp.c_cflag & CRTSCTS) != 0);
+
+    return (software && hardware)?HANDSHAKE_BOTH:
+        (software)?HANDSHAKE_SOFTWARE:(hardware)?HANDSHAKE_HARDWARE:HANDSHAKE_NONE;
+}
+
+enum parity serial_get_parity (SerialDevice device)
+{
+    struct termios tmp;
+
+    if (device == NULL)
+        return PARITY_NONE;
+    if ( device->fd > 0 )
+    {
+        tcgetattr(device->fd, &tmp);
+    }
+    else
+    {
+        memcpy(&tmp,&device->config,sizeof(device->config));
+    }
+
+    if ( (tmp.c_cflag & PARENB) > 0 )
+    {
+        return ( (tmp.c_cflag & PARODD) > 0 )?PARITY_ODD:PARITY_EVEN;
+    }
+    else
+    {
+        return PARITY_NONE;
+    }
+}
+
+enum access_mode serial_get_access_mode (SerialDevice device)
+{
+    int oflag;
+
+    if (device == NULL)
+        return ACCESS_NONE;
+    if ( device->fd > 0 )
+    {
+        oflag = fcntl(device->fd, F_GETFL);
+        return ( (oflag & O_RDWR) > 0 )?ACCESS_READ_WRITE:
+            ((oflag & O_WRONLY) > 0 )?ACCESS_WRITE_ONLY:((oflag & O_RDONLY) > 0 )?
+            ACCESS_READ_ONLY:ACCESS_NONE;
+    }
+    else
+    {
+        return device->access;
     }
 }
 

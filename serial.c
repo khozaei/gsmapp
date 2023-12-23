@@ -11,6 +11,8 @@
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <errno.h>
+#include <stdio.h>
 
 #define UNUSED(X) (void)(X);
 #define STB_DS_IMPLEMENTATION
@@ -144,6 +146,7 @@ void serial_open (SerialDevice device)
             flag = (O_RDONLY | O_NONBLOCK);
     }
     device->fd = open(device->port, flag);
+    printf("fd: %i, %i, %s\n", device->fd, errno, device->port);
     if (device->fd > 0)
     {
         tcgetattr(device->fd, &device->old_config);
@@ -169,11 +172,14 @@ intmax_t serial_write (SerialDevice device, const uint8_t *data, size_t length)
     intmax_t res;
 
     res = 0;
+    printf("fd: %i, %i, %s\n", (device==NULL), errno, data);
     if (device == NULL)
         return 0;
+    printf("fd: %i, %i, %s\n", device->fd, errno, data);
     if ( device->fd > 0 )
     {
         res = write(device->fd, data, length);
+        printf("fd: %i, %i, %s\n", device->fd, errno, data);
         tcdrain(device->fd);
     }
     return res;

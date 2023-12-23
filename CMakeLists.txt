@@ -3,9 +3,16 @@ project(gsmapp C)
 
 set(CMAKE_C_STANDARD 11)
 
+include(AddGitSubmodule.cmake)
+option(BUILD_TESTING "Build without tests" OFF)
+add_git_submodule(3rdparty/libuv)
+
+include_directories(3rdparty/stb 3rdparty/libuv/include)
+
 add_executable(gsmapp main.c
-        stb_ds.h
         gsm.h
         gsm.c
         serial.h
         serial.c)
+
+target_link_libraries(${PROJECT_NAME} uv_a)

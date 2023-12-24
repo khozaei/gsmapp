@@ -38,7 +38,7 @@ struct _serial {
     void (* open) (SerialDevice device);
     void (* close) (SerialDevice device);
     intmax_t (* write) (SerialDevice device,  const uint8_t *data, size_t length);
-    intmax_t (* read) (SerialDevice device,  uint8_t *data, size_t length);
+    intmax_t (* read) (SerialDevice device,  uint8_t *data, size_t length, uint32_t ms);
     void (* enable_async) (SerialDevice device, void (* callback) (int fd, uint8_t *data, size_t length));
     void (* disable_async) (SerialDevice device);
 

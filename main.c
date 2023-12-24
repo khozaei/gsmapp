@@ -28,17 +28,15 @@ int main() {
     serial.set_access_mode(dev, ACCESS_READ_WRITE);
     serial.set_handshake(dev, HANDSHAKE_NONE);
     serial.set_echo(dev,true);
-    serial.enable_async(dev,read_serial);
     serial.open(dev);
-    printf("error open: %d\n",errno);
+//    serial.enable_async(dev,read_serial);
     serial.write(dev, (uint8_t *)"AT\r\n", 5);
-    printf("error write: %d\n",errno);
-//    uint8_t data[64];
-//    serial.read(dev, data, 63);
-    printf("error read: %d\n",errno);
-//    printf("read from serial: %s",data);
+    uint8_t data[64];
+//    sleep(1);
+    serial.read(dev, data, 63, 8000);
+    printf("read from serial: %s\n",data);
+    sync();
 
-    printf("error close: %d\n",errno);
     uv_tcp_init(uv_default_loop(), &server);
     uv_ip4_addr("0.0.0.0", 2986, &bind_addr);
     uv_tcp_bind(&server, (const struct sockaddr *)&bind_addr, 0);

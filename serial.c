@@ -24,7 +24,7 @@ static void serial_free(SerialDevice *device);
 static void serial_open (SerialDevice device);
 static void serial_close (SerialDevice device);
 static intmax_t serial_write (SerialDevice device, const uint8_t *data, size_t length);
-static intmax_t serial_read (SerialDevice device,  uint8_t *data, size_t length);
+static intmax_t serial_read (SerialDevice device,  uint8_t *data, size_t length, uint32_t  timeout);
 static void serial_enable_async (SerialDevice device, void (* callback) (int fd, uint8_t *data, size_t length));
 static void serial_disable_async (SerialDevice device);
 static void serial_action (int signum, siginfo_t *info, void *context);
@@ -89,7 +89,7 @@ SerialDevice serial_init(const char *port)
     struct _serial_device *device;
 
     name_len = (strlen(port) + 1);
-    device = calloc(sizeof (struct _serial_device), 1);
+    device = malloc(sizeof (struct _serial_device));
     if (device == NULL)
         return NULL;
     device->port = calloc(sizeof (uint8_t),name_len);
@@ -172,29 +172,44 @@ intmax_t serial_write (SerialDevice device, const uint8_t *data, size_t length)
     intmax_t res;
 
     res = 0;
-    printf("fd: %i, %i, %s\n", (device==NULL), errno, data);
     if (device == NULL)
         return 0;
-    printf("fd: %i, %i, %s\n", device->fd, errno, data);
     if ( device->fd > 0 )
     {
         res = write(device->fd, data, length);
-        printf("fd: %i, %i, %s\n", device->fd, errno, data);
         tcdrain(device->fd);
+//        tcflush(device->fd, TCIOFLUSH);
+//        sync();
     }
     return res;
 }
 
-intmax_t serial_read (SerialDevice device,  uint8_t *data, size_t length)
+intmax_t serial_read (SerialDevice device,  uint8_t *data, size_t length, uint32_t ms)
 {
     intmax_t res;
+    uint32_t time;
 
     res = 0;
+    time = 0;
+    memset(data, 0 , length);
     if (device == NULL)
         return 0;
     if ( device->fd > 0)
     {
-        res = read(device->fd, data, length);
+        memset(data,0, length);
+        while (time <= ms) {
+            res = read(device->fd, &data[0], length);
+            printf("")
+            if (errno == EAGAIN || errno == EINTR) {
+                usleep(10 * 1000);//10ms
+                time+=10;
+                continue;
+            }
+            else {
+                printf("read: %zu, %s\n", res, data);
+                break;
+            }
+        }
     }
     return res;
 }
@@ -207,8 +222,9 @@ void serial_enable_async (SerialDevice device, void (* callback) (int fd, uint8_
     {
         arrput(device_list, *device);
         device->action.sa_sigaction = serial_action;
-        device->action.sa_flags |= SA_SIGINFO;
+        device->action.sa_flags |= SA_SIGINFO | SA_RESTART;
         device->action.sa_restorer = NULL;
+        device->callback = callback;
         sigaction(SIGIO, &device->action, NULL);
         fcntl(device->fd, F_SETFL, O_ASYNC | FNDELAY);
         fcntl(device->fd, F_GETOWN, getpid());

@@ -14,9 +14,9 @@
 #include <errno.h>
 #include <stdio.h>
 
+#include "clist.h"
+
 #define UNUSED(X) (void)(X);
-#define STB_DS_IMPLEMENTATION
-#include "stb_ds.h"
 
 static SerialDevice serial_init(const char *port);
 static void serial_free(SerialDevice *device);
@@ -24,7 +24,7 @@ static void serial_free(SerialDevice *device);
 static void serial_open (SerialDevice device);
 static void serial_close (SerialDevice device);
 static intmax_t serial_write (SerialDevice device, const uint8_t *data, size_t length);
-static intmax_t serial_read (SerialDevice device,  uint8_t *data, size_t length, uint32_t  timeout);
+static intmax_t serial_read (SerialDevice device,  uint8_t *data, size_t length, uint32_t  ms);
 static void serial_enable_async (SerialDevice device, void (* callback) (int fd, uint8_t *data, size_t length));
 static void serial_disable_async (SerialDevice device);
 static void serial_action (int signum, siginfo_t *info, void *context);
@@ -70,6 +70,8 @@ const struct _serial serial = {
         .is_echo_on = &serial_is_echo_on
 };
 
+CList *list;
+
 struct _serial_device{
     char                *port;
     int                 fd;
@@ -80,8 +82,6 @@ struct _serial_device{
 
     void (* callback) (int fd, uint8_t *data, size_t length);
 };
-
-static struct _serial_device *device_list;
 
 SerialDevice serial_init(const char *port)
 {
@@ -100,8 +100,9 @@ SerialDevice serial_init(const char *port)
     device->config.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
     device->config.c_cflag &= ~(CSIZE | PARENB);
     device->config.c_cflag |= CS8;
+//    device->config.c_lflag |= ICANON | ISIG;  /* canonical input */
     device->config.c_cc[VTIME] = 0;
-    device->config.c_cc[VMIN] = 1;
+    device->config.c_cc[VMIN] = 2;
 
     return device;
 }
@@ -134,19 +135,18 @@ void serial_open (SerialDevice device)
     switch(device->access)
     {
         case ACCESS_READ_ONLY:
-            flag = (O_RDONLY | O_NONBLOCK);
+            flag = (O_RDONLY |  O_NOCTTY | O_SYNC);
             break;
         case ACCESS_WRITE_ONLY:
-            flag = (O_WRONLY | O_NONBLOCK);
+            flag = (O_WRONLY |  O_NOCTTY | O_SYNC);
             break;
         case ACCESS_READ_WRITE:
-            flag = (O_RDWR | O_NONBLOCK);
+            flag = (O_RDWR |  O_NOCTTY | O_SYNC);
             break;
         default:
-            flag = (O_RDONLY | O_NONBLOCK);
+            flag = (O_RDONLY |  O_NOCTTY | O_SYNC);
     }
     device->fd = open(device->port, flag);
-    printf("fd: %i, %i, %s\n", device->fd, errno, device->port);
     if (device->fd > 0)
     {
         tcgetattr(device->fd, &device->old_config);
@@ -196,17 +196,15 @@ intmax_t serial_read (SerialDevice device,  uint8_t *data, size_t length, uint32
         return 0;
     if ( device->fd > 0)
     {
-        memset(data,0, length);
         while (time <= ms) {
             res = read(device->fd, &data[0], length);
-            printf("")
-            if (errno == EAGAIN || errno == EINTR) {
+            tcflush(device->fd, TCIFLUSH);
+            if (errno == EAGAIN || errno == EINTR || res == 0) {
                 usleep(10 * 1000);//10ms
                 time+=10;
                 continue;
             }
             else {
-                printf("read: %zu, %s\n", res, data);
                 break;
             }
         }
@@ -220,9 +218,10 @@ void serial_enable_async (SerialDevice device, void (* callback) (int fd, uint8_
         return;
     if (device->fd > 0)
     {
-        arrput(device_list, *device);
+        list = CList_init(sizeof(struct _serial_device));
+        list->add(list, device);
         device->action.sa_sigaction = serial_action;
-        device->action.sa_flags |= SA_SIGINFO | SA_RESTART;
+        device->action.sa_flags |= SA_SIGINFO ;
         device->action.sa_restorer = NULL;
         device->callback = callback;
         sigaction(SIGIO, &device->action, NULL);
@@ -239,20 +238,20 @@ void serial_disable_async (SerialDevice device)
         return;
     if (device->fd > 0)
     {
-        for ( int i = 0; i <= arrlen(device_list); i++)
-        {
-            if ( device_list != NULL &&  device_list[i].fd == device->fd)
-            {
-                        arrdelswap(device_list,i);
+        if (list != NULL) {
+            for (int i = 0; i <= list->count(list); i++) {
+                if (list->at(list, i) == device) {
+                    list->remove(list, i);
+                }
             }
         }
         memcpy(&tmp, &device->action, sizeof(device->action));
         device->action.sa_sigaction = NULL;
         device->action.sa_flags = SA_RESETHAND;
         sigaction(SIGIO, &device->action, &tmp);
-        if (arrlenu(device_list) == 0)
-                    arrfree(device_list);
-        device_list = NULL;
+        if (list != NULL && list->count(list) == 0)
+                    list->free(list);
+        list = NULL;
     }
 }
 
@@ -260,21 +259,24 @@ void serial_action (int signum, siginfo_t *info, void *context)
 {
     UNUSED(signum)
     UNUSED(context)
+    printf("serial_action: len=%i, info=%i\n", ((SerialDevice)list->at(list, 0))->fd, info->si_fd);
     if (info == NULL)
         return;
-    for ( int i = 0; i <= arrlen(device_list); i++)
-    {
-        if ( device_list != NULL && device_list[i].fd == info->si_fd)
-        {
-            if (device_list[i].callback != NULL)
-            {
-                if ( device_list[i].fd > 0)
-                {
-                    size_t res;
-                    uint8_t  data[1024];
+    if (list != NULL) {
+        for (int i = 0; i < list->count(list); i++) {
+            if (((SerialDevice)list->at(list, i))->fd == info->si_fd) {
+                printf("callback %i, %i\n", ((SerialDevice)list->at(list, i))->callback == NULL,
+                       ((SerialDevice)list->at(list, i))->fd);
+                if (((SerialDevice)list->at(list, i))->callback != NULL) {
+                    if (((SerialDevice)list->at(list, i))->fd > 0) {
+                        size_t res;
+                        uint8_t data[1024];
 
-                    res = read(device_list[i].fd, data, 1024);
-                    device_list[i].callback(device_list[i].fd, data, res);
+                        printf("fd=%i\n", info->si_fd);
+                        res = read(info->si_fd, data, 1024);
+                        ((SerialDevice)list->at(list, i))->callback(info->si_fd, data, res);
+                        break;
+                    }
                 }
             }
         }

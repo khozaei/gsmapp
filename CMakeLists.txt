@@ -7,12 +7,14 @@ include(AddGitSubmodule.cmake)
 option(BUILD_TESTING "Build without tests" OFF)
 add_git_submodule(3rdparty/libuv)
 
-include_directories(3rdparty/stb 3rdparty/libuv/include)
+include_directories(3rdparty/CLIST 3rdparty/libuv/include)
 
 add_executable(gsmapp main.c
         gsm.h
         gsm.c
         serial.h
-        serial.c)
+        serial.c
+        3rdparty/CLIST/clist.c
+        3rdparty/CLIST/clist.h)
 
 target_link_libraries(${PROJECT_NAME} uv_a)

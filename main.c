@@ -21,21 +21,20 @@ int main() {
     gsm.sendSMS("gholi", "09214528198");
     gsm.free(&gsm_device);
     SerialDevice dev = serial.init("/dev/ttyUSB2");
-    serial.set_baudrate(dev,115200);
-    serial.set_parity(dev,PARITY_NONE);
+    serial.set_baudrate(dev, 115200);
+    serial.set_parity(dev, PARITY_NONE);
     serial.set_stopbits(dev, 1);
     serial.set_databits(dev, 8);
     serial.set_access_mode(dev, ACCESS_READ_WRITE);
     serial.set_handshake(dev, HANDSHAKE_NONE);
-    serial.set_echo(dev,true);
+    serial.set_echo(dev,false);
     serial.open(dev);
-//    serial.enable_async(dev,read_serial);
+    serial.enable_async(dev,read_serial);
     serial.write(dev, (uint8_t *)"AT\r\n", 5);
-    uint8_t data[64];
+//    uint8_t data[64];
 //    sleep(1);
-    serial.read(dev, data, 63, 8000);
-    printf("read from serial: %s\n",data);
-    sync();
+//    serial.read(dev, data, 63, 500);
+//    printf("read from serial: %s\n",data);
 
     uv_tcp_init(uv_default_loop(), &server);
     uv_ip4_addr("0.0.0.0", 2986, &bind_addr);

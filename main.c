@@ -5,11 +5,17 @@
 
 #include <stdio.h>
 #include <unistd.h>
+#include <string.h>
+#include <stdlib.h>
 #include <errno.h>
 
 void read_serial(int fd, uint8_t *data, size_t len)
 {
-    printf("fd=%i,data = [%s], len=%zu\n",fd, data,len);
+    uint8_t *_data;
+
+    _data = calloc(sizeof (uint8_t), len);
+    memcpy(_data, data, len);
+    printf("fd=%i,data = [%s], len=%zu\n",fd, _data,len);
 }
 
 int main() {
@@ -32,7 +38,8 @@ int main() {
     serial.enable_async(dev,read_serial);
     serial.write(dev, (uint8_t *)"AT\r\n", 5);
 //    uint8_t data[64];
-//    sleep(1);
+    sleep(1);
+    serial.write(dev, (uint8_t *)"AT\r\n", 5);
 //    serial.read(dev, data, 63, 500);
 //    printf("read from serial: %s\n",data);
 

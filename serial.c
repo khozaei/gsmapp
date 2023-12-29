@@ -5,18 +5,17 @@
 #include "serial.h"
 
 #include <termios.h>
-#include <signal.h>
-#include <bits/sigaction.h>
 #include <string.h>
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
 #include <stdio.h>
+#include <pthread.h>
+#include <sys/epoll.h>
 
-#include "clist.h"
-
-#define UNUSED(X) (void)(X);
+#define MAX_EVENTS 5
+#define BUFFER_SIZE 1024
 
 static SerialDevice serial_init(const char *port);
 static void serial_free(SerialDevice *device);
@@ -27,7 +26,7 @@ static intmax_t serial_write (SerialDevice device, const uint8_t *data, size_t l
 static intmax_t serial_read (SerialDevice device,  uint8_t *data, size_t length, uint32_t  ms);
 static void serial_enable_async (SerialDevice device, void (* callback) (int fd, uint8_t *data, size_t length));
 static void serial_disable_async (SerialDevice device);
-static void serial_action (int signum, siginfo_t *info, void *context);
+static void *serial_read_async(void *device);
 
 static bool serial_set_baudrate (SerialDevice device, uint32_t baudrate);
 static void serial_set_parity (SerialDevice device,enum parity parity);
@@ -70,7 +69,6 @@ const struct _serial serial = {
         .is_echo_on = &serial_is_echo_on
 };
 
-CList *list;
 
 struct _serial_device{
     char                *port;
@@ -78,8 +76,7 @@ struct _serial_device{
     uint8_t             access;
     struct termios      config;
     struct termios      old_config;
-    struct sigaction    action;
-
+    pthread_t           *thread;
     void (* callback) (int fd, uint8_t *data, size_t length);
 };
 
@@ -97,12 +94,14 @@ SerialDevice serial_init(const char *port)
     device->config.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP
                              | INLCR | IGNCR | ICRNL | IXON);
     device->config.c_oflag &= ~OPOST;
-    device->config.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+    device->config.c_lflag &= ~(ECHO | ECHONL | ICANON | IEXTEN);
+    device->config.c_lflag |= ISIG;
     device->config.c_cflag &= ~(CSIZE | PARENB);
     device->config.c_cflag |= CS8;
 //    device->config.c_lflag |= ICANON | ISIG;  /* canonical input */
     device->config.c_cc[VTIME] = 0;
     device->config.c_cc[VMIN] = 2;
+    device->thread = NULL;
 
     return device;
 }
@@ -114,6 +113,8 @@ void serial_free(SerialDevice *device)
         {
             tcsetattr((*device)->fd, TCSANOW, &((*device)->old_config));
         }
+        if ((*device)->thread != NULL)
+            serial_disable_async(*device);
         free((*device)->port);
         (*device)->port = NULL;
         free((*device));
@@ -218,69 +219,69 @@ void serial_enable_async (SerialDevice device, void (* callback) (int fd, uint8_
         return;
     if (device->fd > 0)
     {
-        list = CList_init(sizeof(struct _serial_device));
-        list->add(list, device);
-        device->action.sa_sigaction = serial_action;
-        device->action.sa_flags |= SA_SIGINFO ;
-        device->action.sa_restorer = NULL;
+        if (device->thread != NULL)
+            serial_disable_async(device);
+        device->thread = malloc(sizeof (pthread_t));
+        if (device->thread) {
+            pthread_create(device->thread, NULL, serial_read_async,(void *)device);
+        }
         device->callback = callback;
-        sigaction(SIGIO, &device->action, NULL);
-        fcntl(device->fd, F_SETFL, O_ASYNC | FNDELAY);
-        fcntl(device->fd, F_GETOWN, getpid());
     }
 }
 
 void serial_disable_async (SerialDevice device)
 {
-    struct sigaction tmp;
-
     if (device == NULL)
         return;
-    if (device->fd > 0)
+    if (device->thread != NULL)
     {
-        if (list != NULL) {
-            for (int i = 0; i <= list->count(list); i++) {
-                if (list->at(list, i) == device) {
-                    list->remove(list, i);
-                }
-            }
-        }
-        memcpy(&tmp, &device->action, sizeof(device->action));
-        device->action.sa_sigaction = NULL;
-        device->action.sa_flags = SA_RESETHAND;
-        sigaction(SIGIO, &device->action, &tmp);
-        if (list != NULL && list->count(list) == 0)
-                    list->free(list);
-        list = NULL;
+        pthread_cancel(*device->thread);
+        free(device->thread);
+        device->thread = NULL;
     }
 }
 
-void serial_action (int signum, siginfo_t *info, void *context)
+void *serial_read_async(void *device_void)
 {
-    UNUSED(signum)
-    UNUSED(context)
-    printf("serial_action: len=%i, info=%i\n", ((SerialDevice)list->at(list, 0))->fd, info->si_fd);
-    if (info == NULL)
-        return;
-    if (list != NULL) {
-        for (int i = 0; i < list->count(list); i++) {
-            if (((SerialDevice)list->at(list, i))->fd == info->si_fd) {
-                printf("callback %i, %i\n", ((SerialDevice)list->at(list, i))->callback == NULL,
-                       ((SerialDevice)list->at(list, i))->fd);
-                if (((SerialDevice)list->at(list, i))->callback != NULL) {
-                    if (((SerialDevice)list->at(list, i))->fd > 0) {
-                        size_t res;
-                        uint8_t data[1024];
+    //read thread loop
+    int epfd, ready;
+    ssize_t len;
+    struct epoll_event ev, ev_list[MAX_EVENTS];
+    uint8_t data[BUFFER_SIZE];
 
-                        printf("fd=%i\n", info->si_fd);
-                        res = read(info->si_fd, data, 1024);
-                        ((SerialDevice)list->at(list, i))->callback(info->si_fd, data, res);
-                        break;
-                    }
-                }
+    SerialDevice device = (SerialDevice)device_void;
+    if (device == NULL)
+        return NULL;
+    epfd = epoll_create(1);
+    if (epfd < 0)
+        return NULL;
+    ev.events = EPOLLIN;
+    ev.data.fd = device->fd;
+    if (epoll_ctl(epfd,EPOLL_CTL_ADD,device->fd,&ev) == -1)
+        return NULL;
+    while (device->thread != NULL && pthread_equal(*device->thread, pthread_self())) {
+        ready = epoll_wait(epfd, ev_list, MAX_EVENTS,-1);
+        if (ready == -1){
+            if (errno == EINTR)
+                continue;
+            else
+                return NULL;
+        }
+        printf("ready: %d\n", ready);
+
+        for (int i = 0; i < ready; i++) {
+            if (ev_list[i].events & EPOLLIN) {
+                printf("EPOLLIN\n");
+                len = read(device->fd, data, BUFFER_SIZE);
+                if (len == -1)
+                    return NULL;
+                if (device->callback)
+                    device->callback(device->fd, data, len);
             }
         }
     }
+
+    return NULL;
 }
 
 bool serial_set_baudrate (SerialDevice device, const uint32_t baudrate)

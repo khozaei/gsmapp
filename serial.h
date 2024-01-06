@@ -52,6 +52,7 @@ struct _serial {
     uint32_t (* get_current_baudrate) (SerialDevice device);
     uint8_t (* get_databits) (SerialDevice device);
     uint8_t (* get_stopbits) (SerialDevice device);
+    int (* get_file_descriptor) (SerialDevice device);
     bool (* is_echo_on) (SerialDevice device);
     enum handshake (* get_handshake) (SerialDevice device);
     enum parity (* get_parity) (SerialDevice device);

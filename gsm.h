@@ -6,13 +6,19 @@
 #ifndef GSMAPP_GSM_H
 #define GSMAPP_GSM_H
 
-typedef struct _gsm_device *GSMDevice;
+typedef struct gsm_device *GSMDevice;
+
+enum gsm_vendor_model {
+    GSM_AI_A7 = 0x0100,
+    GSM_AI_A6
+};
 
 struct _gsm{
-    GSMDevice   (* init) ();
+    GSMDevice   (* init) (const char *port, enum gsm_vendor_model vendor);
     void        (* free) (GSMDevice *device);
-    //void (*register_sim)();
-    void (*sendSMS)(char *message, char *number);
+
+    void (*register_sim) (GSMDevice device);
+    void (*send_sms) (GSMDevice device,char *message, char *number);
 };
 extern const struct _gsm gsm;
 

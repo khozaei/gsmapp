@@ -38,6 +38,7 @@ static void serial_set_handshake (SerialDevice device, enum handshake handshake)
 static uint32_t serial_get_current_baudrate (SerialDevice device);
 static uint8_t serial_get_databits (SerialDevice device);
 static uint8_t serial_get_stopbits (SerialDevice device);
+static int serial_get_file_descriptor (SerialDevice device);
 static bool serial_is_echo_on (SerialDevice device);
 static enum handshake serial_get_handshake (SerialDevice device);
 static enum parity serial_get_parity (SerialDevice device);
@@ -66,6 +67,7 @@ const struct _serial serial = {
         .get_handshake = &serial_get_handshake,
         .get_parity = &serial_get_parity,
         .get_stopbits = &serial_get_stopbits,
+        .get_file_descriptor = serial_get_file_descriptor,
         .is_echo_on = &serial_is_echo_on
 };
 
@@ -100,9 +102,8 @@ SerialDevice serial_init(const char *port)
     device->config.c_cflag |= CS8;
 //    device->config.c_lflag |= ICANON | ISIG;  /* canonical input */
     device->config.c_cc[VTIME] = 0;
-    device->config.c_cc[VMIN] = 2;
+    device->config.c_cc[VMIN] = 1;
     device->thread = NULL;
-
     return device;
 }
 
@@ -271,7 +272,6 @@ void *serial_read_async(void *device_void)
 
         for (int i = 0; i < ready; i++) {
             if (ev_list[i].events & EPOLLIN) {
-                printf("EPOLLIN\n");
                 len = read(device->fd, data, BUFFER_SIZE);
                 if (len == -1)
                     return NULL;
@@ -692,4 +692,11 @@ speed_t validate_baudrate(uint32_t baud)
         default:
             return B0;
     }
+}
+
+int serial_get_file_descriptor (SerialDevice device)
+{
+    if (device == NULL)
+        return -1;
+    return device->fd;
 }

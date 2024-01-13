@@ -10,7 +10,7 @@
 typedef struct _t_buffer *Buffer;
 
 struct _buffer {
-    Buffer  (* init) (size_t size);
+    Buffer      (* init) (size_t size);
     void        (* free) (Buffer *buffer);
 
     void        (* push) (Buffer ring, const char *str);

@@ -4,6 +4,7 @@
 //
 #include "gsm.h"
 #include "serial.h"
+#include "buffer.h"
 
 
 #include <stdlib.h>
@@ -14,6 +15,7 @@
 #include <pthread.h>
 
 #define CMD_MAX_LEN 1024
+#define REPLY_MAX_LEN 4096
 #define UNUSED(X) (void *)(X)
 typedef struct task* Task;
 
@@ -27,7 +29,7 @@ static void gsm_init_ai_a7_a6(GSMDevice device);
 static void read_serial(int fd, uint8_t *data, size_t len);
 static void write_cmd(GSMDevice device, const char *cmd);
 
-static void generic_callback (Task task);
+static void generic_process (Task task);
 
 struct gsm_device{
     char *port;
@@ -37,6 +39,7 @@ struct gsm_device{
     GMutex mutex;
     pthread_t thread;
     gint *fd;
+    Buffer buffer;
 };
 
 struct task {
@@ -50,6 +53,7 @@ struct task {
 };
 
 GHashTable *task_scheduler;
+GHashTable *task_devices;
 
 const struct _gsm gsm = {
     .init = &gsm_init,
@@ -86,7 +90,59 @@ void hash_value_destroy (gpointer value)
         g_free(value);
 }
 
-void * scheduler_task (void *device_pointer)
+void hash_device_destroy (gpointer value)
+{
+    //TODO
+    //gsm_free(&((GSMDevice)value));
+}
+
+void *buffer_process (void *device_pointer)
+{
+    GSMDevice device = (GSMDevice)device_pointer;
+    GQueue  *tasks;
+    Task    task;
+    char    buf[REPLY_MAX_LEN];
+
+    if (device == NULL)
+        return NULL;
+    while (true){
+        memset(buf,0,REPLY_MAX_LEN);
+        buffer.pop_break(device->buffer, buf);
+        if (strnlen(buf,REPLY_MAX_LEN) == 0){
+            g_usleep(1000 * 1);
+            continue;
+        }
+        tasks = (GQueue *)g_hash_table_lookup(task_scheduler, device->fd);
+        if (tasks == NULL)
+            continue;
+        g_mutex_lock(&device->mutex);
+        task = (Task)g_queue_peek_head(tasks);
+        if (task == NULL) {
+            g_mutex_unlock(&device->mutex);
+            g_usleep(1000 * 10);
+            continue;
+        }
+        if (!task->is_sent){
+            g_mutex_unlock(&device->mutex);
+            g_usleep(1000 * 10);
+            continue;
+        }
+        if (task->reply == NULL)
+            task->reply = g_string_new(buf);
+        else
+            g_string_append(task->reply,buf);
+        g_mutex_unlock(&device->mutex);
+        g_string_ascii_up(task->reply);
+        task->is_reply_ok = (g_strstr_len(task->reply->str,
+                                          (gssize)task->reply->len,"OK") != NULL);
+        if (task->cb != NULL)
+            task->cb(task);
+
+    }
+    return NULL;
+}
+
+void *scheduler_task (void *device_pointer)
 {
     GSMDevice device = (GSMDevice)device_pointer;
     GQueue  *tasks;
@@ -143,6 +199,10 @@ gpointer scheduler_init(gpointer data)
                                            g_int_equal,
                                            (GDestroyNotify) hash_key_destroy,
                                            (GDestroyNotify) hash_value_destroy);
+    task_devices = g_hash_table_new_full(g_int_hash,
+                                         g_int_equal,
+                                         (GDestroyNotify)hash_key_destroy,
+                                         (GDestroyNotify) hash_device_destroy);
     return NULL;
 }
 
@@ -174,6 +234,10 @@ GSMDevice gsm_init(const char *port, enum gsm_vendor_model vendor)
             exit(EXIT_FAILURE);
         }
         *gsm_dev->fd = serial.get_file_descriptor (gsm_dev->serial);
+        if (task_devices != NULL) {
+            g_hash_table_insert(task_devices, gsm_dev->fd,gsm_dev);
+        }
+        gsm_dev->buffer = buffer.init(REPLY_MAX_LEN);
         pthread_create(&gsm_dev->thread,NULL,scheduler_task,gsm_dev);
     }
     return gsm_dev;
@@ -222,7 +286,7 @@ void send_sms(GSMDevice device, char *message, char *number)
         return;
     task->request = g_string_new("AT");
     task->timeout = 100;
-    task->cb = generic_callback;
+    task->cb = generic_process;
     fd = g_new(gint,1);
     *fd = serial.get_file_descriptor(device->serial);
     tasks = g_hash_table_lookup(task_scheduler,fd);
@@ -236,12 +300,15 @@ void send_sms(GSMDevice device, char *message, char *number)
 
 void read_serial(int fd, uint8_t *data, size_t len)
 {
-//    uint8_t *_data;
-//
-//    _data = calloc(sizeof (uint8_t), len);
-//    memcpy(_data, data, len);
-//    printf("fd=%i,data = [%s], len=%zu\n",fd, _data,len);
-//    free(_data);
+    GSMDevice device;
+
+    device = g_hash_table_lookup(task_devices, GINT_TO_POINTER((gint)fd));
+    if (device == NULL)
+        return;
+    if (strnlen((const char *)data,len) == len)
+        data[len - 1] = '\0';//insure null terminating string
+    printf("read_serial\n");
+    buffer.push(device->buffer,(const char *)data);
 }
 
 void register_sim (GSMDevice device)
@@ -258,13 +325,11 @@ void write_cmd(GSMDevice device, const char *cmd)
     serial.write(device->serial,(const uint8_t *)"\r\n", 2);
 }
 
-void generic_callback (Task task)
+void generic_process (Task task)
 {
     if (task == NULL)
         return;
     if (task->reply == NULL)
         return;
-    g_string_ascii_up(task->reply);
-    task->is_reply_ok = (g_strstr_len(task->reply->str,
-                                      (gssize)task->reply->len,"OK") != NULL);
+    printf("generic_process\n");
 }

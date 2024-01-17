@@ -251,6 +251,7 @@ void *serial_read_async(void *device_void)
     uint8_t data[BUFFER_SIZE];
 
     SerialDevice device = (SerialDevice)device_void;
+
     if (device == NULL)
         return NULL;
     epfd = epoll_create(1);

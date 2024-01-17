@@ -1,28 +1,19 @@
 #include "gsm.h"
-#include "buffer.h"
 
 #include "uv.h"
-
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-
-Buffer ring_buffer;
 
 int main() {
     uv_tcp_t server;
     struct sockaddr_in bind_addr;
 
-    ring_buffer = buffer.init(2024);
     GSMDevice gsm_device = gsm.init("/dev/ttyUSB0", GSM_AI_A7);
     gsm.send_sms(gsm_device,"gholi", "09214528198");
     uv_sleep(200);
     while (1) {
 //        buffer.push(ring_buffer, "GHOLI \r\n \r   i \n");
-        gsm.send_sms(gsm_device,"aa","09214528198");
+//        gsm.send_sms(gsm_device,"aa","09214528198");
         uv_sleep(400);
     }
-    buffer.free(&ring_buffer);
 
 
     uv_tcp_init(uv_default_loop(), &server);

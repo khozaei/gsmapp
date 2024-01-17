@@ -54,6 +54,8 @@ struct task {
 
 GHashTable *task_scheduler;
 GHashTable *task_devices;
+GMutex mutex_scheduler;
+GMutex mutex_devices;
 
 const struct _gsm gsm = {
     .init = &gsm_init,
@@ -105,6 +107,8 @@ void *buffer_process (void *device_pointer)
 
     if (device == NULL)
         return NULL;
+    if (device->buffer == NULL)
+        return NULL;
     while (true){
         memset(buf,0,REPLY_MAX_LEN);
         buffer.pop_break(device->buffer, buf);
@@ -112,7 +116,9 @@ void *buffer_process (void *device_pointer)
             g_usleep(1000 * 1);
             continue;
         }
+        g_mutex_lock(&mutex_scheduler);
         tasks = (GQueue *)g_hash_table_lookup(task_scheduler, device->fd);
+        g_mutex_unlock(&mutex_scheduler);
         if (tasks == NULL)
             continue;
         g_mutex_lock(&device->mutex);
@@ -151,7 +157,9 @@ void *scheduler_task (void *device_pointer)
     if (device == NULL)
         return NULL;
     while (true) {
+        g_mutex_lock(&mutex_scheduler);
         tasks = (GQueue *)g_hash_table_lookup(task_scheduler, device->fd);
+        g_mutex_unlock(&mutex_scheduler);
         if (tasks == NULL)
             continue;
         g_mutex_lock(&device->mutex);
@@ -183,7 +191,8 @@ void *scheduler_task (void *device_pointer)
             else
                 task->is_reply_ok = false;
         }
-        write_cmd(device, task->request->str);
+        if (!task->is_sent)
+            write_cmd(device, task->request->str);
         printf("scheduler_task\n");
         g_mutex_unlock(&device->mutex);
         g_usleep(1000 * task->timeout);
@@ -203,6 +212,8 @@ gpointer scheduler_init(gpointer data)
                                          g_int_equal,
                                          (GDestroyNotify)hash_key_destroy,
                                          (GDestroyNotify) hash_device_destroy);
+    g_mutex_init(&mutex_scheduler);
+    g_mutex_init(&mutex_devices);
     return NULL;
 }
 
@@ -235,10 +246,13 @@ GSMDevice gsm_init(const char *port, enum gsm_vendor_model vendor)
         }
         *gsm_dev->fd = serial.get_file_descriptor (gsm_dev->serial);
         if (task_devices != NULL) {
+            g_mutex_lock(&mutex_devices);
             g_hash_table_insert(task_devices, gsm_dev->fd,gsm_dev);
+            g_mutex_unlock(&mutex_devices);
         }
         gsm_dev->buffer = buffer.init(REPLY_MAX_LEN);
         pthread_create(&gsm_dev->thread,NULL,scheduler_task,gsm_dev);
+        pthread_create(&gsm_dev->thread,NULL,buffer_process,gsm_dev);
     }
     return gsm_dev;
 }
@@ -275,35 +289,52 @@ void send_sms(GSMDevice device, char *message, char *number)
 {
     struct task *task;
     GQueue *tasks;
-    gint *fd;
 
     g_assert(device != NULL);
     if (device == NULL)
         return;
-    printf("SendSMS(%s,%s) %i\n", message, number,serial.get_file_descriptor(device->serial));
+    printf("SendSMS(%s,%s) %i\n", message, number,*device->fd);
     task = malloc(sizeof (struct task));
+    g_assert(task !=NULL);
     if (task == NULL)
         return;
     task->request = g_string_new("AT");
     task->timeout = 100;
     task->cb = generic_process;
-    fd = g_new(gint,1);
-    *fd = serial.get_file_descriptor(device->serial);
-    tasks = g_hash_table_lookup(task_scheduler,fd);
+    g_mutex_lock(&mutex_scheduler);
+    tasks = g_hash_table_lookup(task_scheduler,device->fd);
+    g_mutex_unlock(&mutex_scheduler);
+    g_mutex_lock(&device->mutex);
     if (tasks == NULL) {
         tasks = g_queue_new();
-        g_hash_table_insert(task_scheduler, fd, tasks);
-    } else
-        g_free(fd);
+        g_assert(tasks != NULL);
+        g_mutex_lock(&mutex_scheduler);
+        g_hash_table_insert(task_scheduler, device->fd, tasks);
+        g_mutex_unlock(&mutex_scheduler);
+    }
     g_queue_push_tail(tasks,task);
+    g_mutex_unlock(&device->mutex);
 }
 
 void read_serial(int fd, uint8_t *data, size_t len)
 {
     GSMDevice device;
+    gint *local_fd;
 
-    device = g_hash_table_lookup(task_devices, GINT_TO_POINTER((gint)fd));
+    printf("read_serial:[%s]\n",data);
+    g_assert(task_devices != NULL);
+
+    if (!task_devices)
+        return;
+    local_fd = g_new(gint,1);
+    *local_fd = fd;
+    g_mutex_lock(&mutex_devices);
+    device = g_hash_table_lookup(task_devices, local_fd);
+    g_mutex_unlock(&mutex_devices);
+    g_free(local_fd);
     if (device == NULL)
+        return;
+    if (device->buffer == NULL)
         return;
     if (strnlen((const char *)data,len) == len)
         data[len - 1] = '\0';//insure null terminating string

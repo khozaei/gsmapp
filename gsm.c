@@ -80,6 +80,20 @@ void task_free (Task *task)
     task = NULL;
 }
 
+void task_destroy(gpointer value)
+{
+    Task task;
+
+    task = (Task)value;
+    if (task == NULL)
+        return;
+    if (task->reply != NULL)
+        g_free(task->reply);
+    if (task->request != NULL)
+        g_free(task->request);
+    g_free(task);
+}
+
 void hash_key_destroy (gpointer value)
 {
     if (value != NULL)
@@ -88,14 +102,21 @@ void hash_key_destroy (gpointer value)
 
 void hash_value_destroy (gpointer value)
 {
-    if (value != NULL)
-        g_free(value);
+    GQueue *tasks;
+
+    tasks = (GQueue *)value;
+    if (tasks == NULL)
+        return;
+    g_queue_free_full(tasks, task_destroy);
 }
 
 void hash_device_destroy (gpointer value)
 {
-    //TODO
-    //gsm_free(&((GSMDevice)value));
+    GSMDevice device;
+
+    device = (GSMDevice)value;
+    if (device != NULL)
+        gsm_free(&device);
 }
 
 void *buffer_process (void *device_pointer)
@@ -111,7 +132,17 @@ void *buffer_process (void *device_pointer)
         return NULL;
     while (true){
         memset(buf,0,REPLY_MAX_LEN);
+        buffer.peek(device->buffer, buf, REPLY_MAX_LEN);
+        if (strnlen(buf,REPLY_MAX_LEN))
+            printf("buffer_process1: %s\n",buf);
+        memset(buf,0,REPLY_MAX_LEN);
         buffer.pop_break(device->buffer, buf);
+        if (strnlen(buf,REPLY_MAX_LEN))
+            printf("buffer_process2: %s\n",buf);
+        memset(buf,0,REPLY_MAX_LEN);
+        buffer.peek(device->buffer, buf, REPLY_MAX_LEN);
+        if (strnlen(buf,REPLY_MAX_LEN))
+            printf("buffer_process3: %s\n",buf);
         if (strnlen(buf,REPLY_MAX_LEN) == 0){
             g_usleep(1000 * 1);
             continue;
@@ -338,7 +369,6 @@ void read_serial(int fd, uint8_t *data, size_t len)
         return;
     if (strnlen((const char *)data,len) == len)
         data[len - 1] = '\0';//insure null terminating string
-    printf("read_serial\n");
     buffer.push(device->buffer,(const char *)data);
 }
 
@@ -346,7 +376,10 @@ void register_sim (GSMDevice device)
 {
 //    write_cmd(device, "ATE0\r\n", true);
 //    uv_sleep(500);
-    write_cmd(device, "AT+CREG?");
+    write_cmd(device, "AT+CREG?\r\nAT");
+    write_cmd(device, "AT+CREG=1");
+    write_cmd(device, "AT+CREG=2");
+    write_cmd(device, "AT+CREG=3");
 }
 
 void write_cmd(GSMDevice device, const char *cmd)

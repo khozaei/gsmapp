@@ -13,9 +13,10 @@ struct _buffer {
     Buffer      (* init) (size_t size);
     void        (* free) (Buffer *buffer);
 
-    void        (* push) (Buffer ring, const char *str);
-    void        (* pop_len) (Buffer ring, char *str, size_t len);
-    void        (* pop_break) (Buffer ring, char *str);
+    void        (* push) (Buffer buffer, const char *str);
+    void        (* pop_len) (Buffer buffer, char *str, size_t len);
+    void        (* pop_break) (Buffer buffer, char *str);
+    void        (* peek) (Buffer buffer, char *str, size_t len);
 };
 extern const struct _buffer buffer;
 

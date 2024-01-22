@@ -13,6 +13,7 @@ static void buffer_free(Buffer *_buffer);
 static void buffer_push (Buffer _buffer, const char *str);
 static void buffer_pop_len (Buffer _buffer, char *str, size_t len);
 static void buffer_pop_break (Buffer _buffer, char *str);
+static void buffer_peek (Buffer _buffer, char *str, size_t len);
 
 struct _t_buffer {
     GString *content;
@@ -26,6 +27,7 @@ const struct _buffer buffer = {
     .push = &buffer_push,
     .pop_len = &buffer_pop_len,
     .pop_break = &buffer_pop_break,
+    .peek = &buffer_peek
 };
 
 Buffer buffer_init (size_t size)
@@ -117,7 +119,18 @@ void buffer_pop_break (Buffer _buffer, char *str)
             break;
         local_index++;
     }
+    if (!local_break)
+        local_index = 0;
     pthread_mutex_unlock(&_buffer->mutex);
     if (local_index > 0)
         buffer_pop_len(_buffer, str, local_index);
+}
+
+void buffer_peek (Buffer _buffer, char *str, size_t len)
+{
+    if (_buffer == NULL)
+        return;
+    pthread_mutex_lock(&_buffer->mutex);
+    g_strlcpy(str, _buffer->content->str, len);
+    pthread_mutex_unlock(&_buffer->mutex);
 }

@@ -277,7 +277,7 @@ void *serial_read_async(void *device_void)
                 if (len == -1)
                     return NULL;
                 if (device->callback)
-                    device->callback(device->fd, data, len);
+                    device->callback(device->fd, data, len+1);
             }
         }
     }

@@ -30,6 +30,7 @@ static void read_serial(int fd, uint8_t *data, size_t len);
 static void write_cmd(GSMDevice device, const char *cmd);
 
 static void generic_process (Task task);
+static Task create_task (const char *cmd, uint32_t timeout, Task old_task, void (*cb)(Task));
 
 struct gsm_device{
     char *port;
@@ -132,17 +133,9 @@ void *buffer_process (void *device_pointer)
         return NULL;
     while (true){
         memset(buf,0,REPLY_MAX_LEN);
-        buffer.peek(device->buffer, buf, REPLY_MAX_LEN);
-        if (strnlen(buf,REPLY_MAX_LEN))
-            printf("buffer_process1: %s\n",buf);
-        memset(buf,0,REPLY_MAX_LEN);
         buffer.pop_break(device->buffer, buf);
         if (strnlen(buf,REPLY_MAX_LEN))
             printf("buffer_process2: %s\n",buf);
-        memset(buf,0,REPLY_MAX_LEN);
-        buffer.peek(device->buffer, buf, REPLY_MAX_LEN);
-        if (strnlen(buf,REPLY_MAX_LEN))
-            printf("buffer_process3: %s\n",buf);
         if (strnlen(buf,REPLY_MAX_LEN) == 0){
             g_usleep(1000 * 1);
             continue;
@@ -318,20 +311,27 @@ void gsm_free(GSMDevice *gsm_device)
 
 void send_sms(GSMDevice device, char *message, char *number)
 {
-    struct task *task;
+    Task task1, task2, task3;
     GQueue *tasks;
+    GString *cmgs, *msg;
 
     g_assert(device != NULL);
     if (device == NULL)
         return;
-    printf("SendSMS(%s,%s) %i\n", message, number,*device->fd);
-    task = malloc(sizeof (struct task));
-    g_assert(task !=NULL);
-    if (task == NULL)
+    cmgs = g_string_new("");
+    if (cmgs == NULL)
         return;
-    task->request = g_string_new("AT");
-    task->timeout = 100;
-    task->cb = generic_process;
+    g_string_append_printf(cmgs, "AT+CMGS=\"%s\"", number);
+    printf("SendSMS(%s,%s) %i\n", message, number,*device->fd);
+    task1 = create_task("AT+CMGF=1",100,NULL,NULL);
+    task2 = create_task(cmgs->str,200,task1,generic_process);
+    g_free(cmgs);
+    msg = g_string_new(message);
+    if (msg == NULL)
+        return;
+    g_string_append_c(msg,(gchar)0x1A);
+    task3 = create_task(msg,200,task2,NULL);
+    g_free(msg);
     g_mutex_lock(&mutex_scheduler);
     tasks = g_hash_table_lookup(task_scheduler,device->fd);
     g_mutex_unlock(&mutex_scheduler);
@@ -343,7 +343,9 @@ void send_sms(GSMDevice device, char *message, char *number)
         g_hash_table_insert(task_scheduler, device->fd, tasks);
         g_mutex_unlock(&mutex_scheduler);
     }
-    g_queue_push_tail(tasks,task);
+    g_queue_push_tail(tasks,task1);
+    g_queue_push_tail(tasks,task2);
+    g_queue_push_tail(tasks,task3);
     g_mutex_unlock(&device->mutex);
 }
 
@@ -376,10 +378,7 @@ void register_sim (GSMDevice device)
 {
 //    write_cmd(device, "ATE0\r\n", true);
 //    uv_sleep(500);
-    write_cmd(device, "AT+CREG?\r\nAT");
-    write_cmd(device, "AT+CREG=1");
-    write_cmd(device, "AT+CREG=2");
-    write_cmd(device, "AT+CREG=3");
+    write_cmd(device, "AT+CREG?");
 }
 
 void write_cmd(GSMDevice device, const char *cmd)
@@ -391,9 +390,28 @@ void write_cmd(GSMDevice device, const char *cmd)
 
 void generic_process (Task task)
 {
+    printf("generic_process\n");
     if (task == NULL)
         return;
     if (task->reply == NULL)
         return;
-    printf("generic_process\n");
+    if (g_strstr_len(task->request->str, task->request->len,"CMGS") != NULL){
+        task->is_reply_ok = (g_strstr_len(task->reply->str,
+                                          task->reply->len,">") != NULL);
+    }
+}
+
+Task create_task (const char *cmd, uint32_t timeout, Task old_task, void (*cb)(Task))
+{
+    Task task;
+
+    task = malloc(sizeof (struct task));
+    g_assert(task !=NULL);
+    if (task == NULL)
+        return task;
+    task->request = g_string_new(cmd);
+    task->timeout = timeout;
+    task->cb = cb;
+    task->priv_task = old_task;
+    return task;
 }

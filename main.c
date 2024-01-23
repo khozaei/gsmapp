@@ -8,7 +8,7 @@ int main() {
 
     GSMDevice gsm_device = gsm.init("/dev/ttyUSB0", GSM_AI_A7);
 
-//    gsm.send_sms(gsm_device,"gholi", "09214528198");
+    gsm.send_sms(gsm_device,"gholi", "09214528198");
     uv_sleep(200);
     while (1) {
 //        buffer.push(ring_buffer, "GHOLI \r\n \r   i \n");

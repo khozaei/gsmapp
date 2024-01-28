@@ -215,8 +215,10 @@ void *scheduler_task (void *device_pointer)
             else
                 task->is_reply_ok = false;
         }
-        if (!task->is_sent)
+        if (!task->is_sent) {
             write_cmd(device, task->request->str);
+            task->is_sent = true;
+        }
         printf("scheduler_task\n");
         g_mutex_unlock(&device->mutex);
         g_usleep(1000 * task->timeout);

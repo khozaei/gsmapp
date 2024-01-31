@@ -1,10 +1,48 @@
 #include "gsm.h"
+#include "smartpointer.h"
 
 #include "uv.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+struct testsmart{
+    char *name;
+    int value;
+};
+
+void free_test(void *ptr){
+    struct testsmart *t;
+
+    t = (struct testsmart *)ptr;
+    if (t == NULL) return;
+    printf("destroy: %s,%i\n",t->name, t->value);
+    if (t->name != NULL)
+        free(t->name);
+    free(t);
+}
+
+void test_scope() {
+    struct testsmart *t;
+
+    t = malloc(sizeof (struct testsmart));
+    if (t == NULL) return;
+    t->value = 76;
+    t->name = malloc(sizeof (char) * 10);
+
+    if (t->name)
+        sprintf(t->name, "Gholi");
+    printf("testsmart: %s,%i\n", t->name,t->value);
+    unique_ptr ptr = smartpointer.unique_ptr_make(t, free_test);
+    if (ptr != NULL) {
+        printf("unique: %s\n", ((struct testsmart *)smartpointer.unique_ptr_get(ptr))->name);
+    }
+}
 
 int main() {
     uv_tcp_t server;
     struct sockaddr_in bind_addr;
+    test_scope();
 
     GSMDevice gsm_device = gsm.init("/dev/ttyUSB0", GSM_AI_A7);
 

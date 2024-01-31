@@ -22,6 +22,8 @@ add_executable(gsmapp main.c
         serial.c
         buffer.c
         buffer.h
+        smartpointer.c
+        smartpointer.h
 )
 
 target_link_libraries(${PROJECT_NAME} uv_a)

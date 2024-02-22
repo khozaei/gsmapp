@@ -333,7 +333,7 @@ void send_sms(GSMDevice device, char *message, char *number)
     if (msg == NULL)
         return;
     g_string_append_c(msg,(gchar)0x1A);
-    task3 = create_task(msg,200,NULL);
+    task3 = create_task(msg->str,200,NULL);
     task2->next = task3;
     g_free(msg);
     g_mutex_lock(&mutex_scheduler);

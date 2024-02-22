@@ -13,6 +13,7 @@
 #include <stdbool.h>
 #include <glib.h>
 #include <pthread.h>
+#include <time.h>
 
 #define CMD_MAX_LEN 1024
 #define REPLY_MAX_LEN 4096
@@ -30,7 +31,7 @@ static void read_serial(int fd, uint8_t *data, size_t len);
 static void write_cmd(GSMDevice device, const char *cmd);
 
 static void generic_process (Task task);
-static Task create_task (const char *cmd, uint32_t timeout, Task old_task, void (*cb)(Task));
+static Task create_task (const char *cmd, uint32_t timeout, void (*cb)(Task));
 
 struct gsm_device{
     char *port;
@@ -47,8 +48,9 @@ struct task {
     GString *request;
     void (* cb) (Task task);
     guint32 timeout; //millisecond
+    guint64 sent_time;
     GString *reply;
-    Task priv_task;
+    Task next;
     bool is_reply_ok;
     bool is_sent;
 };
@@ -67,6 +69,8 @@ const struct _gsm gsm = {
 
 void task_free (Task *task)
 {
+    Task tmp;
+
     if (task == NULL)
         return;
     if ((*task) == NULL)
@@ -75,8 +79,14 @@ void task_free (Task *task)
         g_free((*task)->request);
     if ((*task)->reply != NULL)
         g_free((*task)->reply);
-    if ((*task)->priv_task != NULL)
-        task_free(&(*task)->priv_task);
+    if ((*task)->next != NULL){
+        tmp = (*task)->next;
+        while (tmp != NULL) {
+            Task t = tmp->next;
+            free(tmp);
+            tmp = t;
+        }
+    }
     free(task);
     task = NULL;
 }
@@ -195,33 +205,23 @@ void *scheduler_task (void *device_pointer)
         }
         if (task->is_sent) {
             //remove sent task after timeout
-            Task tmp;
-
-            tmp = (Task)g_queue_pop_head(tasks);
-            if (tmp != NULL) {
-                task_free(&tmp);
-                tmp = (Task)g_queue_peek_head(tasks);
-                if (tmp != NULL) {
-                    tmp->priv_task = NULL;
-                    tmp->is_sent = true;//to remove in next run of the loop
-                }
-            }
             g_mutex_unlock(&device->mutex);
             continue;
         }
-        if (task->priv_task != NULL) {
-            if (task->priv_task->is_reply_ok)
-                write_cmd(device, task->request->str);
-            else
-                task->is_reply_ok = false;
-        }
         if (!task->is_sent) {
+            struct timespec t;
+            Task tmp;
+
             write_cmd(device, task->request->str);
+            if (clock_gettime(CLOCK_REALTIME,&t) == 0)
+                task->sent_time = t.tv_nsec / 1000000;//ms
             task->is_sent = true;
+            g_mutex_unlock(&device->mutex);
+            while (true){
+                g_usleep(100);
+                
+            }
         }
-        printf("scheduler_task\n");
-        g_mutex_unlock(&device->mutex);
-        g_usleep(1000 * task->timeout);
     }
     return NULL;
 }
@@ -325,14 +325,16 @@ void send_sms(GSMDevice device, char *message, char *number)
         return;
     g_string_append_printf(cmgs, "AT+CMGS=\"%s\"", number);
     printf("SendSMS(%s,%s) %i\n", message, number,*device->fd);
-    task1 = create_task("AT+CMGF=1",100,NULL,NULL);
-    task2 = create_task(cmgs->str,200,task1,generic_process);
+    task1 = create_task("AT+CMGF=1",100,NULL);
+    task2 = create_task(cmgs->str,200,generic_process);
+    task1->next = task2;
     g_free(cmgs);
     msg = g_string_new(message);
     if (msg == NULL)
         return;
     g_string_append_c(msg,(gchar)0x1A);
-    task3 = create_task(msg,200,task2,NULL);
+    task3 = create_task(msg,200,NULL);
+    task2->next = task3;
     g_free(msg);
     g_mutex_lock(&mutex_scheduler);
     tasks = g_hash_table_lookup(task_scheduler,device->fd);
@@ -403,7 +405,7 @@ void generic_process (Task task)
     }
 }
 
-Task create_task (const char *cmd, uint32_t timeout, Task old_task, void (*cb)(Task))
+Task create_task (const char *cmd, uint32_t timeout, void (*cb)(Task))
 {
     Task task;
 
@@ -414,6 +416,6 @@ Task create_task (const char *cmd, uint32_t timeout, Task old_task, void (*cb)(T
     task->request = g_string_new(cmd);
     task->timeout = timeout;
     task->cb = cb;
-    task->priv_task = old_task;
+    task->next = NULL;
     return task;
 }

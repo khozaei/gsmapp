@@ -1,5 +1,6 @@
 #include "gsm.h"
 #include "smartpointer.h"
+#include "version.h"
 
 #include "uv.h"
 
@@ -39,9 +40,28 @@ void test_scope() {
     }
 }
 
-int main() {
+void print_version() {
+    printf("Application Version: %s\n", PROJECT_VERSION);
+    printf("Version Details:\n");
+    printf("Major: %d\n", PROJECT_VERSION_MAJOR);
+    printf("Minor: %d\n", PROJECT_VERSION_MINOR);
+    printf("Patch: %d\n", PROJECT_VERSION_PATCH);
+    printf("Build Date: %s\n", __DATE__);
+    printf("Build Time: %s\n", __TIME__);
+}
+
+int main(int argc, char *argv[]) {
     uv_tcp_t server;
     struct sockaddr_in bind_addr;
+
+    for (int i = 1; i < argc; i++) {
+        // Version checks
+        if (strcmp(argv[i], "-v") == 0 || 
+            strcmp(argv[i], "--version") == 0) {
+            print_version();
+            return 0;
+        }
+    }
     test_scope();
 
     GSMDevice gsm_device = gsm.init("/dev/ttyUSB0", GSM_AI_A7);

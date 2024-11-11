@@ -1,10 +1,15 @@
 cmake_minimum_required(VERSION 3.27)
-project(gsmapp C)
+
+project(gsmapp
+        LANGUAGES C)
 
 set(CMAKE_C_STANDARD 11)
 
-include(AddGitSubmodule.cmake)
 option(BUILD_TESTING "Build without tests" OFF)
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+include(AddGitSubmodule)
+include(GitVersion)
 add_git_submodule(3rdparty/libuv)
 
 include_directories(3rdparty/libuv/include)
@@ -14,22 +19,13 @@ pkg_check_modules(GLIB2 REQUIRED glib-2.0)
 include_directories(${GLIB2_INCLUDE_DIRS})
 link_directories(${GLIB2_LIBRARY_DIRS})
 
-find_package(Git QUIET)
-if(GIT_FOUND)
-    execute_process(
-        COMMAND ${GIT_EXECUTABLE} describe --tags --always
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        OUTPUT_VARIABLE GIT_VERSION
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-    set(PROJECT_VERSION ${GIT_VERSION})
-endif()
+get_version_from_git()
 
 configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/version.h.in
+    ${CMAKE_SOURCE_DIR}/version.h.in
     ${CMAKE_CURRENT_BINARY_DIR}/version.h
 )
-message(${PROJECT_VERSION})
+message(STATUS "PROJECT_VERSION: ${PROJECT_VERSION}")
 
 add_executable(gsmapp main.c
         gsm.h
@@ -40,8 +36,9 @@ add_executable(gsmapp main.c
         buffer.h
         smartpointer.c
         smartpointer.h
-        version.h
+        ${CMAKE_CURRENT_BINARY_DIR}/version.h
 )
 
 target_link_libraries(${PROJECT_NAME} uv_a)
-target_link_libraries(gsmapp ${GLIB2_LIBRARIES})
+target_link_libraries(${PROJECT_NAME} ${GLIB2_LIBRARIES})
+target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})

@@ -42,6 +42,7 @@ void test_scope() {
 
 void print_version() {
     printf("Application Version: %s\n", PROJECT_VERSION);
+    printf("Full Version: %s\n", FULL_VERSION);
     printf("Version Details:\n");
     printf("Major: %d\n", PROJECT_VERSION_MAJOR);
     printf("Minor: %d\n", PROJECT_VERSION_MINOR);
